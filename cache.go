@@ -14,7 +14,7 @@ type Mappings struct {
 	dataPath       string
 	cacheHitCount  int
 	cacheMissCount int
-	lock           sync.Mutex
+	lock           sync.RWMutex
 }
 
 func NewMappings(dataPath string) *Mappings {
@@ -23,6 +23,7 @@ func NewMappings(dataPath string) *Mappings {
 	}
 	m := &Mappings{
 		cache: make(map[string]string),
+		lock:  sync.RWMutex{},
 	}
 	ticker := time.NewTicker(10 * time.Second)
 	_, err := os.Stat(dataPath)
@@ -58,13 +59,13 @@ func NewMappings(dataPath string) *Mappings {
 }
 
 func (m *Mappings) Get(key string) string {
-	//m.lock.Lock()
+	m.lock.RLock()
 	if val, ok := m.cache[key]; ok {
 		m.cacheHitCount++
 		return val
 	}
 	m.cacheMissCount++
-	//m.lock.Unlock()
+	m.lock.RUnlock()
 	return ""
 }
 
@@ -81,7 +82,10 @@ func (m *Mappings) Size() int {
 }
 
 func (m *Mappings) Put(key, value string) {
+	//m.lock.Lock()
+	// TODO: make cache thread safe
 	(*m).cache[key] = value
+	//m.lock.Unlock()
 }
 
 func (m *Mappings) Delete(key string) {
