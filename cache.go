@@ -81,7 +81,9 @@ func (m *Mappings) Size() int {
 }
 
 func (m *Mappings) Put(key, value string) {
-	//m.lock.Lock()
 	(*m).cache[key] = value
-	//m.lock.Lock()
+}
+
+func (m *Mappings) Delete(key string) {
+	delete(m.cache, key)
 }

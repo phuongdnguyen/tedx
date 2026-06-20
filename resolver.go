@@ -3,6 +3,7 @@ package main
 import (
 	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/spaolacci/murmur3"
 )
@@ -26,6 +27,9 @@ func (r *Resolver) Resolve(payload *Payload, registry *VirtualNamespaceRegistry)
 		return physNs, true
 	}
 	virtualNamespace := registry.Resolve(payload.VirtualNamespace)
+	if virtualNamespace == nil {
+		return "", false // Should ideally not happen if properly registered
+	}
 	physNs := virtualNamespace.Hasher.GetSlot(key)
 	r.Stats.Inc(physNs)
 	r.Cache.Put(key, physNs)
@@ -33,6 +37,7 @@ func (r *Resolver) Resolve(payload *Payload, registry *VirtualNamespaceRegistry)
 }
 
 type ConsistentHash struct {
+	mu           sync.RWMutex
 	virtualNodes int               // Number of virtual replicas per slot
 	ring         []uint32          // Sorted list of vnode hashes
 	vnodeToSlot  map[uint32]string // Maps a vnode hash back to the actual slot name
@@ -52,6 +57,9 @@ func (ch *ConsistentHash) hash32(key string) uint32 {
 
 // AddSlot introduces a new slot (node) to the ring
 func (ch *ConsistentHash) AddSlot(slot string) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
 	for i := 0; i < ch.virtualNodes; i++ {
 		// Create a unique name for each virtual node
 		vnodeName := slot + "#" + strconv.Itoa(i)
@@ -66,6 +74,9 @@ func (ch *ConsistentHash) AddSlot(slot string) {
 
 // GetSlot allocates a key to the nearest clockwise slot
 func (ch *ConsistentHash) GetSlot(key string) string {
+	ch.mu.RLock()
+	defer ch.mu.RUnlock()
+
 	if len(ch.ring) == 0 {
 		return ""
 	}
@@ -88,6 +99,9 @@ func (ch *ConsistentHash) GetSlot(key string) string {
 
 // RemoveSlot completely deletes a slot and its virtual nodes from the ring
 func (ch *ConsistentHash) RemoveSlot(slot string) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+
 	// 1. Recreate the hashes that were generated for this slot's virtual nodes
 	hashesToRemove := make(map[uint32]bool)
 	for i := 0; i < ch.virtualNodes; i++ {
@@ -111,13 +125,18 @@ func (ch *ConsistentHash) RemoveSlot(slot string) {
 
 // GetAllSlots returns a deduplicated list of all slots (physical namespaces) in the ring
 func (ch *ConsistentHash) GetAllSlots() []string {
+	ch.mu.RLock()
+	defer ch.mu.RUnlock()
+
 	uniqueSlots := make(map[string]bool)
 	var slots []string
+
 	for _, slot := range ch.vnodeToSlot {
 		if !uniqueSlots[slot] {
 			uniqueSlots[slot] = true
 			slots = append(slots, slot)
 		}
 	}
+
 	return slots
 }

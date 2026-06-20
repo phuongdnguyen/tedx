@@ -24,8 +24,7 @@ func Test_All(t *testing.T) {
 	mappings := NewMappings("./data/mappings.json")
 	resolver := NewResolver(mappings)
 
-	virtualNamespaces := []*VirtualNamespace{vNamespace}
-	registry := NewVirtualNamespaceRegistry(virtualNamespaces)
+	registry := NewVirtualNamespaceRegistry("./data/namespace-registry.json")
 
 	payloads := makePayloads(1000, vNamespaceName)
 

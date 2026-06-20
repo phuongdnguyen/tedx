@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strings"
 
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -55,7 +56,7 @@ func NewTemporalProxy(listenAddr string, registry *VirtualNamespaceRegistry) (*T
 	}
 	proxy.Transport = transport
 
-	mappings := NewMappings("./mappings.json")
+	mappings := NewMappings("./data/mappings.json")
 	resolver := NewResolver(mappings)
 
 	connPark := NewConnPark(resolver, registry, transport)
@@ -70,10 +71,6 @@ func NewTemporalProxy(listenAddr string, registry *VirtualNamespaceRegistry) (*T
 				// 1 byte compressed flag
 				// 4 bytes message length
 				// N bytes protobuf payload
-				fmt.Printf("Intercepted StartWorkflowExecution!\n")
-				fmt.Printf("Path: %s\n", r.URL.Path)
-				fmt.Printf("Payload Length: %d bytes\n", len(bodyBytes))
-
 				newBodyBytes, err := handleStartWorkflowExecution(r, bodyBytes, resolver, registry)
 				if err != nil {
 					log.Printf("Error processing StartWorkflowExecution: %v\n", err)
@@ -270,6 +267,14 @@ func handleRespondWorkflowTaskCompleted(r *http.Request, bodyBytes []byte, resol
 
 	physNs, cacheHit := resolver.Resolve(payload, registry)
 	fmt.Printf("Resolved virtual namespace '%s' to physical namespace '%s' (Cache hit: %v)\n", reqStruct.Namespace, physNs, cacheHit)
+
+	// Delete from cache AFTER resolving,
+	for _, command := range reqStruct.Commands {
+		if command.CommandType == enums.COMMAND_TYPE_COMPLETE_WORKFLOW_EXECUTION {
+			fmt.Printf("completing workflow: %s, removing from routing cache\n", workflowID)
+			resolver.Cache.Delete(workflowID)
+		}
+	}
 
 	ns := parsePhysicalNamespace(physNs)
 
