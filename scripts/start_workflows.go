@@ -29,7 +29,7 @@ func main() {
 	start := time.Now()
 
 	// Use a semaphore to limit concurrency so we don't exhaust resources immediately
-	sem := make(chan struct{}, 100)
+	sem := make(chan struct{}, 2)
 
 	for i := 0; i < numWorkflows; i++ {
 		sem <- struct{}{} // acquire token

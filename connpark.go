@@ -233,7 +233,7 @@ func (cp *ConnPark) ExecutePollActivity(originalReq *http.Request, bodyBytes []b
 		return nil, fmt.Errorf("no physical namespaces found for virtual namespace: %s", virtualNamespaceStr)
 	}
 
-	log.Printf("[ConnPark] Fanning out PollActivityTaskQueue to %d clusters for virtual namespace %s", len(slots), virtualNamespaceStr)
+	log.Printf("Fanning out PollActivityTaskQueue to %d clusters for virtual namespace %s", len(slots), virtualNamespaceStr)
 
 	ctx, cancel := context.WithCancel(originalReq.Context())
 	defer cancel()
@@ -285,12 +285,12 @@ func (cp *ConnPark) ExecutePollActivity(originalReq *http.Request, bodyBytes []b
 			pollResp := &workflowservice.PollActivityTaskQueueResponse{}
 			if err := proto.Unmarshal(respPbPayload, pollResp); err == nil {
 				if len(pollResp.TaskToken) > 0 {
-					log.Printf("[ConnPark] Received activity task from %s!", res.physNs)
-					
+					log.Printf("Received activity task from %s!", res.physNs)
+
 					if pollResp.WorkflowExecution != nil && pollResp.WorkflowExecution.WorkflowId != "" {
 						workflowID := pollResp.WorkflowExecution.WorkflowId
 						cp.resolver.Cache.Put(workflowID, res.physNs)
-						log.Printf("[ConnPark] Cached WorkflowID %s -> %s (from Activity Poll)", workflowID, res.physNs)
+						log.Printf("Cached WorkflowID %s -> %s (from Activity Poll)", workflowID, res.physNs)
 					}
 
 					res.resp.Body = io.NopCloser(bytes.NewBuffer(respBodyBytes))
@@ -305,7 +305,7 @@ func (cp *ConnPark) ExecutePollActivity(originalReq *http.Request, bodyBytes []b
 	}
 
 	if lastEmptyResp != nil {
-		log.Printf("[ConnPark] All clusters timed out polling for activity. Returning empty response.")
+		log.Printf("All clusters timed out polling for activity. Returning empty response.")
 		return lastEmptyResp, nil
 	}
 

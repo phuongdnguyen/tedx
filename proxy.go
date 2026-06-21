@@ -22,13 +22,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type TemporalProxy struct {
+type StickyProxy struct {
 	Server   *http.Server
 	Resolver *Resolver
 	ConnPark *ConnPark
 }
 
-func NewTemporalProxy(listenAddr string, registry *VirtualNamespaceRegistry) (*TemporalProxy, error) {
+func NewStickyProxy(listenAddr string, registry *VirtualNamespaceRegistry) (*StickyProxy, error) {
 	defaultTargetURLStr := "http://localhost:7233"
 	defaultTarget, err := url.Parse(defaultTargetURLStr)
 	if err != nil {
@@ -130,7 +130,7 @@ func NewTemporalProxy(listenAddr string, registry *VirtualNamespaceRegistry) (*T
 		Handler: h2cHandler,
 	}
 
-	return &TemporalProxy{
+	return &StickyProxy{
 		Server:   server,
 		Resolver: resolver,
 		ConnPark: connPark,
@@ -138,13 +138,13 @@ func NewTemporalProxy(listenAddr string, registry *VirtualNamespaceRegistry) (*T
 }
 
 // Start runs the proxy server and blocks until it stops or an error occurs.
-func (tp *TemporalProxy) Start() error {
+func (tp *StickyProxy) Start() error {
 	log.Printf("Starting lightweight proxy on %s \n", tp.Server.Addr)
 	return tp.Server.ListenAndServe()
 }
 
 // Stop gracefully shuts down the proxy server.
-func (tp *TemporalProxy) Stop(ctx context.Context) error {
+func (tp *StickyProxy) Stop(ctx context.Context) error {
 	log.Printf("Stopping proxy on %s\n", tp.Server.Addr)
 	return tp.Server.Shutdown(ctx)
 }
@@ -175,7 +175,7 @@ func handleStartWorkflowExecution(r *http.Request, bodyBytes []byte, resolver *R
 		return nil, fmt.Errorf("failed to unmarshal StartWorkflowExecutionRequest: %w", err)
 	}
 
-	fmt.Printf("Resolving workflowID: %s, namespaceID: %s\n", reqStruct.WorkflowId, reqStruct.Namespace)
+	log.Printf("Resolving workflowID: %s, namespaceID: %s\n", reqStruct.WorkflowId, reqStruct.Namespace)
 
 	payload := &Payload{
 		WorkflowID:       reqStruct.WorkflowId,
@@ -183,7 +183,7 @@ func handleStartWorkflowExecution(r *http.Request, bodyBytes []byte, resolver *R
 	}
 
 	physNs, cacheHit := resolver.Resolve(payload, registry)
-	fmt.Printf("Resolved virtual namespace '%s' to physical namespace '%s' (Cache hit: %v)\n", reqStruct.Namespace, physNs, cacheHit)
+	log.Printf("Resolved virtual namespace '%s' to physical namespace '%s' (Cache hit: %v)\n", reqStruct.Namespace, physNs, cacheHit)
 
 	ns := parsePhysicalNamespace(physNs)
 
@@ -249,8 +249,7 @@ func handleRespondWorkflowTaskCompleted(r *http.Request, bodyBytes []byte, resol
 		return nil, fmt.Errorf("failed to unmarshal RespondWorkflowTaskCompletedRequest: %w", err)
 	}
 
-	// Extract WorkflowID by parsing the TaskToken protobuf directly
-	// rather than relying on reqStruct.ResourceId
+	// Extract WorkflowID by parsing the TaskToken
 	workflowID, err := extractWorkflowIDFromTaskToken(reqStruct.TaskToken)
 	if err != nil || workflowID == "" {
 		log.Printf("Warning: Failed to extract WorkflowId from TaskToken: %v", err)
@@ -258,7 +257,7 @@ func handleRespondWorkflowTaskCompleted(r *http.Request, bodyBytes []byte, resol
 		workflowID = reqStruct.ResourceId
 	}
 
-	fmt.Printf("Resolving RespondWorkflowTaskCompleted workflowID: '%s', namespaceID: '%s'\n", workflowID, reqStruct.Namespace)
+	log.Printf("Resolving RespondWorkflowTaskCompleted workflowID: '%s', namespaceID: '%s'\n", workflowID, reqStruct.Namespace)
 
 	payload := &Payload{
 		WorkflowID:       workflowID,
@@ -266,12 +265,12 @@ func handleRespondWorkflowTaskCompleted(r *http.Request, bodyBytes []byte, resol
 	}
 
 	physNs, cacheHit := resolver.Resolve(payload, registry)
-	fmt.Printf("Resolved virtual namespace '%s' to physical namespace '%s' (Cache hit: %v)\n", reqStruct.Namespace, physNs, cacheHit)
+	log.Printf("Resolved virtual namespace '%s' to physical namespace '%s' (Cache hit: %v)\n", reqStruct.Namespace, physNs, cacheHit)
 
 	// Delete from cache AFTER resolving,
 	for _, command := range reqStruct.Commands {
 		if command.CommandType == enums.COMMAND_TYPE_COMPLETE_WORKFLOW_EXECUTION {
-			fmt.Printf("completing workflow: %s, removing from routing cache\n", workflowID)
+			log.Printf("completing workflow: %s, removing from routing cache\n", workflowID)
 			resolver.Cache.Delete(workflowID)
 		}
 	}
@@ -429,7 +428,7 @@ func handleRespondActivityTaskCompleted(r *http.Request, bodyBytes []byte, resol
 		workflowID = reqStruct.ResourceId
 	}
 
-	fmt.Printf("Resolving RespondActivityTaskCompleted workflowID: '%s', namespaceID: '%s'\n", workflowID, reqStruct.Namespace)
+	log.Printf("Resolving RespondActivityTaskCompleted workflowID: '%s', namespaceID: '%s'\n", workflowID, reqStruct.Namespace)
 
 	payload := &Payload{
 		WorkflowID:       workflowID,
@@ -437,7 +436,7 @@ func handleRespondActivityTaskCompleted(r *http.Request, bodyBytes []byte, resol
 	}
 
 	physNs, cacheHit := resolver.Resolve(payload, registry)
-	fmt.Printf("Resolved virtual namespace '%s' to physical namespace '%s' (Cache hit: %v)\n", reqStruct.Namespace, physNs, cacheHit)
+	log.Printf("Resolved virtual namespace '%s' to physical namespace '%s' (Cache hit: %v)\n", reqStruct.Namespace, physNs, cacheHit)
 
 	ns := parsePhysicalNamespace(physNs)
 

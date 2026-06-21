@@ -10,3 +10,7 @@ scrape_configs:
         - 'temporal-cluster-2:8001'
         labels:
           group: 'temporal'
+
+  - job_name: 'tedx'
+    static_configs:
+      - targets: ['host.docker.internal:8089']

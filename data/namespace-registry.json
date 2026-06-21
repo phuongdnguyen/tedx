@@ -1,1 +1,1 @@
-{"default":["staging::localhost:7233","production::localhost:7233"]}
+{"default":["pricing::localhost:7233","payment::localhost:7233"]}

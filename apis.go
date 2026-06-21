@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type CreateVirtualNamespaceRequest struct {
@@ -19,6 +21,7 @@ type ManagePhysicalNamespaceRequest struct {
 
 func startAdminServer(port int, registry *VirtualNamespaceRegistry) {
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
 
 	mux.HandleFunc("/namespace/virtual/create", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

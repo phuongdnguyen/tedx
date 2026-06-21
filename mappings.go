@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/puzpuzpuz/xsync/v4"
@@ -15,7 +14,6 @@ type Mappings struct {
 	dataPath       string
 	cacheHitCount  int
 	cacheMissCount int
-	lock           sync.RWMutex
 }
 
 func NewMappings(dataPath string) *Mappings {
@@ -24,7 +22,6 @@ func NewMappings(dataPath string) *Mappings {
 	}
 	m := &Mappings{
 		cachev2: xsync.NewMap[string, string](),
-		lock:    sync.RWMutex{},
 	}
 	ticker := time.NewTicker(10 * time.Second)
 	_, err := os.Stat(dataPath)
@@ -38,11 +35,11 @@ func NewMappings(dataPath string) *Mappings {
 		if err := json.Unmarshal(file, &data); err != nil {
 			log.Fatalf("failed to unmarshal mapping file %v, err: %v", dataPath, err)
 		}
-		log.Println("mapping loading")
+		log.Println("mappings loading")
 		for k, v := range data {
 			m.cachev2.Store(k, v)
 		}
-		log.Println("mapping loaded")
+		log.Println("mappings loaded")
 	}
 
 	go func() {
@@ -70,13 +67,11 @@ func NewMappings(dataPath string) *Mappings {
 }
 
 func (m *Mappings) Get(key string) string {
-	m.lock.RLock()
 	if val, ok := m.cachev2.Load(key); ok {
 		m.cacheHitCount++
 		return val
 	}
 	m.cacheMissCount++
-	m.lock.RUnlock()
 	return ""
 }
 

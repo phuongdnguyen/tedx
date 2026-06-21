@@ -1,41 +1,48 @@
 package main
 
-import "sync"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+var (
+	totalWorkflowAllocated = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "total_workflow_allocated",
+			Help: "Total workflow allocated per namespace.",
+		},
+		[]string{"namespace"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(totalWorkflowAllocated)
+}
 
 type StatsDB struct {
-	// TODO: add namespace status
 	namespaces map[string]int
-	lock       sync.RWMutex
 }
 
 func (db *StatsDB) Reset() {
-	db.lock.Lock()
 	for k := range db.namespaces {
 		db.namespaces[k] = 0
+		totalWorkflowAllocated.WithLabelValues(k).Set(0)
 	}
-	db.lock.Unlock()
 }
 
 func (db *StatsDB) Inc(namespace string) {
-	db.lock.Lock()
 	db.namespaces[namespace]++
-	db.lock.Unlock()
+	totalWorkflowAllocated.WithLabelValues(namespace).Inc()
 }
 
 func (db *StatsDB) Remove(namespace string) {
-	db.lock.Lock()
 	delete(db.namespaces, namespace)
-	db.lock.Unlock()
+	totalWorkflowAllocated.DeleteLabelValues(namespace)
 }
 
 func (db *StatsDB) Dump() map[string]int {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
 	return db.namespaces
 }
 
 func (db *StatsDB) Get(namespace string) int {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
 	return db.namespaces[namespace]
 }
