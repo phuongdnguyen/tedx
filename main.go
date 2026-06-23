@@ -1,14 +1,22 @@
 package main
 
-import "log"
+import (
+	"flag"
+	"log"
+)
 
 func main() {
-	registry := NewVirtualNamespaceRegistry("./data/namespace-registry.json")
+	redisAddr := flag.String("redis-addr", "localhost:6379", "Redis server address")
+	listenAddr := flag.String("listen-addr", "localhost:8088", "Proxy listen address")
+	adminPort := flag.Int("admin-port", 8089, "Admin API port")
+	flag.Parse()
+
+	registry := NewVirtualNamespaceRegistry(*redisAddr)
 
 	// Start the Admin API on port 8089
-	go startAdminServer(8089, registry)
+	go startAdminServer(*adminPort, registry)
 
-	proxy, err := NewStickyProxy("localhost:8088", registry)
+	proxy, err := NewStickyProxy(*listenAddr, registry)
 	if err != nil {
 		log.Fatal("Error creating proxy: ", err)
 	}

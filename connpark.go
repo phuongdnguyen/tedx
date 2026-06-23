@@ -35,26 +35,10 @@ type pollResult struct {
 }
 
 func (cp *ConnPark) ExecutePoll(originalReq *http.Request, bodyBytes []byte) (*http.Response, error) {
-	if len(bodyBytes) <= 5 {
-		return nil, fmt.Errorf("payload too short to be valid gRPC")
+	pbPayload, isCompressed, err := extractPayload(bodyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract payload: %w", err)
 	}
-
-	var pbPayload []byte
-	isCompressed := bodyBytes[0] == 1
-	if isCompressed {
-		gz, err := gzip.NewReader(bytes.NewReader(bodyBytes[5:]))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		pbPayload, err = io.ReadAll(gz)
-		gz.Close()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decompress gzip payload: %w", err)
-		}
-	} else {
-		pbPayload = bodyBytes[5:]
-	}
-
 	reqStruct := &workflowservice.PollWorkflowTaskQueueRequest{}
 	if err := proto.Unmarshal(pbPayload, reqStruct); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal PollWorkflowTaskQueueRequest: %w", err)
@@ -129,9 +113,6 @@ func (cp *ConnPark) ExecutePoll(originalReq *http.Request, bodyBytes []byte) (*h
 			pollResp := &workflowservice.PollWorkflowTaskQueueResponse{}
 			if err := proto.Unmarshal(respPbPayload, pollResp); err == nil {
 				if len(pollResp.TaskToken) > 0 {
-					// WE FOUND A TASK!
-					log.Printf("Received task from %s!", res.physNs)
-
 					// Cache the WorkflowID -> Physical Namespace routing
 					if pollResp.WorkflowExecution != nil && pollResp.WorkflowExecution.WorkflowId != "" {
 						workflowID := pollResp.WorkflowExecution.WorkflowId
@@ -197,26 +178,10 @@ func (cp *ConnPark) pollSingleCluster(ctx context.Context, originalReq *http.Req
 }
 
 func (cp *ConnPark) ExecutePollActivity(originalReq *http.Request, bodyBytes []byte) (*http.Response, error) {
-	if len(bodyBytes) <= 5 {
-		return nil, fmt.Errorf("payload too short to be valid gRPC")
+	pbPayload, isCompressed, err := extractPayload(bodyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract payload: %w", err)
 	}
-
-	var pbPayload []byte
-	isCompressed := bodyBytes[0] == 1
-	if isCompressed {
-		gz, err := gzip.NewReader(bytes.NewReader(bodyBytes[5:]))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		pbPayload, err = io.ReadAll(gz)
-		gz.Close()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decompress gzip payload: %w", err)
-		}
-	} else {
-		pbPayload = bodyBytes[5:]
-	}
-
 	reqStruct := &workflowservice.PollActivityTaskQueueRequest{}
 	if err := proto.Unmarshal(pbPayload, reqStruct); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal PollActivityTaskQueueRequest: %w", err)
@@ -342,4 +307,27 @@ func (cp *ConnPark) pollSingleActivityCluster(ctx context.Context, originalReq *
 	req.RequestURI = ""
 
 	return cp.transport.RoundTrip(req)
+}
+
+func extractPayload(bodyBytes []byte) ([]byte, bool, error) {
+	if len(bodyBytes) <= 5 {
+		return nil, false, fmt.Errorf("payload too short to be valid gRPC")
+	}
+
+	var pbPayload []byte
+	isCompressed := bodyBytes[0] == 1
+	if isCompressed {
+		gz, err := gzip.NewReader(bytes.NewReader(bodyBytes[5:]))
+		if err != nil {
+			return nil, isCompressed, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		pbPayload, err = io.ReadAll(gz)
+		gz.Close()
+		if err != nil {
+			return nil, isCompressed, fmt.Errorf("failed to decompress gzip payload: %w", err)
+		}
+	} else {
+		pbPayload = bodyBytes[5:]
+	}
+	return pbPayload, isCompressed, nil
 }

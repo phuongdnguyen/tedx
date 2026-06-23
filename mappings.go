@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 
 	"github.com/redis/go-redis/v9"
@@ -38,7 +39,7 @@ func NewMappings(redisAddr string) *Mappings {
 
 func (m *Mappings) Get(key string) string {
 	val, err := m.client.Get(m.ctx, key).Result()
-	if err == redis.Nil || err != nil {
+	if errors.Is(err, redis.Nil) || err != nil {
 		m.cacheMissCount++
 		return ""
 	}
@@ -57,14 +58,6 @@ func (m *Mappings) Delete(key string) {
 func (m *Mappings) Size() int {
 	size, _ := m.client.DBSize(m.ctx).Result()
 	return int(size)
-}
-
-func (m *Mappings) HitCount() int {
-	return m.cacheHitCount
-}
-
-func (m *Mappings) MissCount() int {
-	return m.cacheMissCount
 }
 
 func (m *Mappings) Clear() {

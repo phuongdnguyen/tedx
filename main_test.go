@@ -1,12 +1,21 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 )
 
 func Test_All(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("An error occurred while starting miniredis: %v", err)
+	}
+	// 2. Ensure it cleans up and shuts down after the test completes
+	defer mr.Close()
 	//create phys namespaces
 	namespaces := []string{"phys-ns-1", "phys-ns-2"}
 	// create virtual namespace
@@ -20,11 +29,13 @@ func Test_All(t *testing.T) {
 	}
 
 	// create cache
-	mappings := NewMappings("localhost:6379")
+	miniRedisPort := mr.Port()
+	miniRedisArr := fmt.Sprintf("localhost:%s", miniRedisPort)
+	mappings := NewMappings(miniRedisArr)
 	mappings.Clear()
 	resolver := NewResolver(mappings)
 
-	registry := NewVirtualNamespaceRegistry("./data/namespace-registry.json")
+	registry := NewVirtualNamespaceRegistry(miniRedisArr)
 	registry.Register(vNamespace)
 
 	payloads := makePayloads(1000, vNamespaceName)
@@ -84,7 +95,9 @@ func Test_All(t *testing.T) {
 			},
 			func(t *testing.T) {
 				payloads = append(payloads, makePayloads(3000, vNamespaceName)...)
-				currentAllocatedToCordoned := resolver.Stats.Get("my-phys-ns")
+
+				currentAllocatedToCordoned, err := getCounterValue("my-phys-ns")
+				assert.Nil(t, err)
 				actualCordonedHit := 0
 				for _, payload := range payloads {
 					physNamespace, hit := resolver.Resolve(payload, registry)
@@ -97,7 +110,7 @@ func Test_All(t *testing.T) {
 					}
 
 				}
-				assert.Equalf(t, currentAllocatedToCordoned, actualCordonedHit, "old payload should stick to cordoned physical namespaces")
+				assert.Equalf(t, int(currentAllocatedToCordoned), actualCordonedHit, "old payload should stick to cordoned physical namespaces")
 			},
 		},
 		{
@@ -120,4 +133,25 @@ func Test_All(t *testing.T) {
 		tt.test()
 		tt.assertion(t)
 	}
+}
+
+// Function to safely extract the current value
+func getCounterValue(namespace string) (float64, error) {
+	// 1. Isolate the specific labeled counter instance
+	counter := totalWorkflowAllocated.WithLabelValues(namespace)
+
+	// 2. Create an empty Metric DTO container
+	var metric dto.Metric
+
+	// 3. Direct the counter to write its internal state into the container
+	if err := counter.Write(&metric); err != nil {
+		return 0, fmt.Errorf("failed to read metric: %w", err)
+	}
+
+	// 4. Safely extract the float64 counter value
+	if metric.Counter != nil {
+		return metric.GetCounter().GetValue(), nil
+	}
+
+	return 0, fmt.Errorf("metric is not a counter")
 }
