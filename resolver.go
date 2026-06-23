@@ -5,18 +5,17 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spaolacci/murmur3"
 )
 
 type Resolver struct {
 	Cache *Mappings
-	Stats *StatsDB
 }
 
 func NewResolver(cache *Mappings) *Resolver {
 	return &Resolver{
 		Cache: cache,
-		Stats: &StatsDB{namespaces: make(map[string]int)},
 	}
 }
 
@@ -31,7 +30,7 @@ func (r *Resolver) Resolve(payload *Payload, registry *VirtualNamespaceRegistry)
 		return "", false // Should ideally not happen if properly registered
 	}
 	physNs := virtualNamespace.Ring.GetSlot(key)
-	r.Stats.Inc(physNs)
+	totalWorkflowAllocated.WithLabelValues(physNs).Inc()
 	r.Cache.Put(key, physNs)
 	return physNs, false
 }
@@ -139,4 +138,18 @@ func (ch *ConsistentHash) GetAllSlots() []string {
 	}
 
 	return slots
+}
+
+var (
+	totalWorkflowAllocated = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "total_workflow_allocated",
+			Help: "Total workflow allocated per namespace.",
+		},
+		[]string{"namespace"},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(totalWorkflowAllocated)
 }

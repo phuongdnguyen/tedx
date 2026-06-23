@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
-	"os"
 	"strings"
 	"sync"
+
+	"github.com/redis/go-redis/v9"
+
 	"time"
 )
 
@@ -38,6 +41,7 @@ func parsePhysicalNamespace(physicalNamespace string) *Namespace {
 type VirtualNamespaceRegistry struct {
 	mu         sync.RWMutex
 	namespaces map[string]*VirtualNamespace
+	db         *redis.Client
 }
 
 // GetSize returns the number of virtual namespaces (for fallback logic)
@@ -47,19 +51,39 @@ func (vr *VirtualNamespaceRegistry) GetSize() int {
 	return len(vr.namespaces)
 }
 
-func NewVirtualNamespaceRegistry(dataPath string) *VirtualNamespaceRegistry {
-	if dataPath == "" {
-		dataPath = "./data/registry.json"
+func NewVirtualNamespaceRegistry(redisAddr string) *VirtualNamespaceRegistry {
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
 	}
+
+	client := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+	})
+	ctx := context.Background()
+	if _, err := client.Ping(ctx).Result(); err != nil {
+		log.Printf("Warning: failed to connect  at %s for registry: %v", redisAddr, err)
+	} else {
+		log.Printf("Connected to %s for registry", redisAddr)
+	}
+
 	v := &VirtualNamespaceRegistry{
 		namespaces: make(map[string]*VirtualNamespace),
+		db:         client,
 	}
 
 	// Read if exist
-	file, err := os.ReadFile(dataPath)
-	if err == nil {
+	var namespaceData []byte
+	var err error
+
+	redisData, redisErr := client.Get(ctx, "virtual_namespace_registry").Result()
+	if redisErr == nil && redisData != "" {
+		namespaceData = []byte(redisData)
+		log.Printf("Loaded virtual namespace registry from redis")
+	}
+
+	if len(namespaceData) > 0 {
 		var newSchema map[string]map[string]NamespaceStatus
-		err = json.Unmarshal(file, &newSchema)
+		err = json.Unmarshal(namespaceData, &newSchema)
 		if err == nil {
 			for virtualName, slotsMap := range newSchema {
 				vNs := NewVirtualNamespace(virtualName)
@@ -72,22 +96,8 @@ func NewVirtualNamespaceRegistry(dataPath string) *VirtualNamespaceRegistry {
 				}
 				v.namespaces[virtualName] = vNs
 			}
-		} else {
-			var schema map[string][]string
-			if err := json.Unmarshal(file, &schema); err != nil {
-				log.Fatalf("failed to unmarshal registry file %v, err: %v", dataPath, err)
-			}
-			for virtualName, slots := range schema {
-				vNs := NewVirtualNamespace(virtualName)
-				for _, slot := range slots {
-					vNs.Add(&Namespace{name: slot})
-				}
-				v.namespaces[virtualName] = vNs
-			}
 		}
-		log.Printf("Loaded %d virtual namespaces from %s", len(v.namespaces), dataPath)
-	} else if !os.IsNotExist(err) {
-		log.Fatalf("failed to read registry file %v, err: %v", dataPath, err)
+		log.Printf("Loaded %d virtual namespaces", len(v.namespaces))
 	}
 
 	// Checkpointing routine
@@ -106,9 +116,11 @@ func NewVirtualNamespaceRegistry(dataPath string) *VirtualNamespaceRegistry {
 				log.Printf("failed to marshal registry cache, err: %v", err)
 				continue
 			}
-			if err := os.WriteFile(dataPath, byteData, os.ModePerm); err != nil {
-				log.Printf("failed to checkpoint registry cache, err: %v", err)
-				continue
+
+			// Checkpoint
+			err = v.db.Set(context.Background(), "virtual_namespace_registry", string(byteData), 0).Err()
+			if err != nil {
+				log.Printf("failed to checkpoint registry, err: %v", err)
 			}
 			log.Printf("registry checkpointed at: %s", time.Now().UTC().Format(time.RFC3339))
 		}

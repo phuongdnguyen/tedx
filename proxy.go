@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
@@ -139,7 +138,7 @@ func NewStickyProxy(listenAddr string, registry *VirtualNamespaceRegistry) (*Sti
 
 // Start runs the proxy server and blocks until it stops or an error occurs.
 func (tp *StickyProxy) Start() error {
-	log.Printf("Starting lightweight proxy on %s \n", tp.Server.Addr)
+	log.Printf("Starting proxy on %s \n", tp.Server.Addr)
 	return tp.Server.ListenAndServe()
 }
 
@@ -150,24 +149,9 @@ func (tp *StickyProxy) Stop(ctx context.Context) error {
 }
 
 func handleStartWorkflowExecution(r *http.Request, bodyBytes []byte, resolver *Resolver, registry *VirtualNamespaceRegistry) ([]byte, error) {
-	if len(bodyBytes) <= 5 {
-		return nil, fmt.Errorf("payload too short to be valid gRPC")
-	}
-
-	var pbPayload []byte
-	isCompressed := bodyBytes[0] == 1
-	if isCompressed {
-		gz, err := gzip.NewReader(bytes.NewReader(bodyBytes[5:]))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		pbPayload, err = io.ReadAll(gz)
-		gz.Close()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decompress gzip payload: %w", err)
-		}
-	} else {
-		pbPayload = bodyBytes[5:]
+	pbPayload, _, err := extractPayload(bodyBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	reqStruct := &workflowservice.StartWorkflowExecutionRequest{}
@@ -200,48 +184,13 @@ func handleStartWorkflowExecution(r *http.Request, bodyBytes []byte, resolver *R
 		return nil, fmt.Errorf("failed to marshal updated StartWorkflowExecutionRequest: %w", err)
 	}
 
-	// We will send the payload uncompressed to avoid any gzip re-compression quirks.
-	finalPayload := newPbPayload
-
-	newBodyLen := len(finalPayload)
-	newBody := make([]byte, 5+newBodyLen)
-	// Set compression flag to 0 (uncompressed)
-	newBody[0] = 0
-	// Set the new message length in big-endian format
-	newBody[1] = byte(newBodyLen >> 24)
-	newBody[2] = byte(newBodyLen >> 16)
-	newBody[3] = byte(newBodyLen >> 8)
-	newBody[4] = byte(newBodyLen)
-
-	copy(newBody[5:], finalPayload)
-
-	// GRPc over HTTP/2 usually does not use Content-Length.
-	// To be safe against length mismatch deadlocks, we delete it.
-	r.ContentLength = -1
-	r.Header.Del("Content-Length")
-
-	return newBody, nil
+	return encodeGRPCPayload(newPbPayload, r), nil
 }
 
 func handleRespondWorkflowTaskCompleted(r *http.Request, bodyBytes []byte, resolver *Resolver, registry *VirtualNamespaceRegistry) ([]byte, error) {
-	if len(bodyBytes) <= 5 {
-		return nil, fmt.Errorf("payload too short to be valid gRPC")
-	}
-
-	var pbPayload []byte
-	isCompressed := bodyBytes[0] == 1
-	if isCompressed {
-		gz, err := gzip.NewReader(bytes.NewReader(bodyBytes[5:]))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		pbPayload, err = io.ReadAll(gz)
-		gz.Close()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decompress gzip payload: %w", err)
-		}
-	} else {
-		pbPayload = bodyBytes[5:]
+	pbPayload, _, err := extractPayload(bodyBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	reqStruct := &workflowservice.RespondWorkflowTaskCompletedRequest{}
@@ -290,22 +239,7 @@ func handleRespondWorkflowTaskCompleted(r *http.Request, bodyBytes []byte, resol
 		return nil, fmt.Errorf("failed to marshal updated RespondWorkflowTaskCompletedRequest: %w", err)
 	}
 
-	finalPayload := newPbPayload
-
-	newBodyLen := len(finalPayload)
-	newBody := make([]byte, 5+newBodyLen)
-	newBody[0] = 0 // uncompressed
-	newBody[1] = byte(newBodyLen >> 24)
-	newBody[2] = byte(newBodyLen >> 16)
-	newBody[3] = byte(newBodyLen >> 8)
-	newBody[4] = byte(newBodyLen)
-
-	copy(newBody[5:], finalPayload)
-
-	r.ContentLength = -1
-	r.Header.Del("Content-Length")
-
-	return newBody, nil
+	return encodeGRPCPayload(newPbPayload, r), nil
 }
 
 // extractWorkflowIDFromTaskToken parses the raw Temporal TaskToken protobuf bytes
@@ -370,50 +304,13 @@ func servePollWorkflowTaskQueue(w http.ResponseWriter, r *http.Request, connPark
 		return
 	}
 
-	// Write the response back to the client
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-
-	// Declare trailers before writing header (optional but good practice)
-	if len(resp.Trailer) > 0 {
-		var trailers []string
-		for k := range resp.Trailer {
-			trailers = append(trailers, k)
-		}
-		w.Header().Set("Trailer", strings.Join(trailers, ","))
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
-
-	// After body is fully read from cluster, write the trailers to client
-	for k, v := range resp.Trailer {
-		for _, vv := range v {
-			w.Header().Add(http.TrailerPrefix+k, vv)
-		}
-	}
+	writeProxyResponse(w, resp)
 }
 
 func handleRespondActivityTaskCompleted(r *http.Request, bodyBytes []byte, resolver *Resolver, registry *VirtualNamespaceRegistry) ([]byte, error) {
-	if len(bodyBytes) <= 5 {
-		return nil, fmt.Errorf("payload too short to be valid gRPC")
-	}
-
-	var pbPayload []byte
-	isCompressed := bodyBytes[0] == 1
-	if isCompressed {
-		gz, err := gzip.NewReader(bytes.NewReader(bodyBytes[5:]))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		pbPayload, err = io.ReadAll(gz)
-		gz.Close()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decompress gzip payload: %w", err)
-		}
-	} else {
-		pbPayload = bodyBytes[5:]
+	pbPayload, _, err := extractPayload(bodyBytes)
+	if err != nil {
+		return nil, err
 	}
 
 	reqStruct := &workflowservice.RespondActivityTaskCompletedRequest{}
@@ -451,19 +348,7 @@ func handleRespondActivityTaskCompleted(r *http.Request, bodyBytes []byte, resol
 		return nil, fmt.Errorf("failed to marshal updated RespondActivityTaskCompletedRequest: %w", err)
 	}
 
-	newBodyLen := len(newPbPayload)
-	newBody := make([]byte, 5+newBodyLen)
-	newBody[0] = 0 // uncompressed
-	newBody[1] = byte(newBodyLen >> 24)
-	newBody[2] = byte(newBodyLen >> 16)
-	newBody[3] = byte(newBodyLen >> 8)
-	newBody[4] = byte(newBodyLen)
-	copy(newBody[5:], newPbPayload)
-
-	r.ContentLength = -1
-	r.Header.Del("Content-Length")
-
-	return newBody, nil
+	return encodeGRPCPayload(newPbPayload, r), nil
 }
 
 func servePollActivityTaskQueue(w http.ResponseWriter, r *http.Request, connPark *ConnPark) {
@@ -481,6 +366,26 @@ func servePollActivityTaskQueue(w http.ResponseWriter, r *http.Request, connPark
 		return
 	}
 
+	writeProxyResponse(w, resp)
+}
+
+func encodeGRPCPayload(finalPayload []byte, r *http.Request) []byte {
+	newBodyLen := len(finalPayload)
+	newBody := make([]byte, 5+newBodyLen)
+	newBody[0] = 0 // uncompressed
+	newBody[1] = byte(newBodyLen >> 24)
+	newBody[2] = byte(newBodyLen >> 16)
+	newBody[3] = byte(newBodyLen >> 8)
+	newBody[4] = byte(newBodyLen)
+	copy(newBody[5:], finalPayload)
+
+	r.ContentLength = -1
+	r.Header.Del("Content-Length")
+
+	return newBody
+}
+
+func writeProxyResponse(w http.ResponseWriter, resp *http.Response) {
 	for k, v := range resp.Header {
 		w.Header()[k] = v
 	}
